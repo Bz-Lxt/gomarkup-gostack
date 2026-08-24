@@ -99,13 +99,21 @@ func (c *Conn) handleGeneral(th *Header, payload []byte) {
 		return
 	}
 	c.updateWindow(th)
-	if th.Has(FlagFIN) {
-		c.processFIN(th, uint32(len(payload)))
-	}
+	// Accept data before processing the FIN so that rcvNxt is advanced
+	// past the payload.  processFIN checks finSeq == rcvNxt; if the FIN
+	// is piggybacked on a data segment and we process the FIN first,
+	// rcvNxt has not yet moved and the check fails, causing the FIN to
+	// be silently dropped.  The data would still be delivered, but the
+	// subsequent Read would block until the deadline instead of
+	// returning io.EOF.  Reordering fixes piggybacked FIN segments
+	// while leaving pure-FIN and pure-data segments unaffected.
 	if len(payload) > 0 && c.state.CanRecvData() || (c.state == SynRcvd && len(payload) > 0) {
 		c.acceptData(th, payload)
 	} else if len(payload) > 0 && c.state == Established {
 		c.acceptData(th, payload)
+	}
+	if th.Has(FlagFIN) {
+		c.processFIN(th, uint32(len(payload)))
 	}
 }
 
